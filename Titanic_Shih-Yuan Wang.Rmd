@@ -1,0 +1,1130 @@
+---
+title: "Kaggle - Titanic"
+author: "Shih-Yuan Wang"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+# Kaggle Competition - "Titanic - Machine Learning from Disaster"
+
+Source: https://www.kaggle.com/c/titanic/overview
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message = FALSE, warning = FALSE}
+# Load libraries 
+
+library(DataExplorer)
+library(knitr)
+library(psych)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(corrplot)
+
+#install.packages("splus2R")
+library(splus2R)
+
+#install.packages("qmrparser")
+library(qmrparser)
+
+library(pROC)
+library(MASS)
+library(glmnet)
+library(e1071)
+library(randomForest)
+library(xgboost)
+library(caret)
+library(neuralnet)
+library(nnet)
+
+```
+
+```{r}
+rm(list = ls()) # clear the workspace
+setwd("C:/Users/User/Desktop/BUS 656 - Machine Learning for BA/Final Project_Titanic")
+```
+
+## 1. Access the Data Set
+
+Data source: https://www.kaggle.com/c/titanic/data
+
+```{r}
+# read in train and test data and create a combined data set to do exploratory data analysis
+
+traindata <- read.csv("train.csv")
+testdata <- read.csv("test.csv")
+head(traindata)
+head(testdata)
+
+# create "Survived" column for combining two data set
+testdata$Survived <- NA
+
+str(testdata) 
+str(traindata)
+
+# create "train_test" column for combining two data set
+traindata$train_test <- as.factor("train")
+testdata$train_test <- as.factor("test")
+
+# combine two data sets
+titanicdata <- rbind(traindata, testdata)
+
+head(titanicdata)
+str(titanicdata)
+summary(titanicdata)
+
+table(titanicdata$Survived)
+```
+
+## 2. Data Overview and Clean the Data
+
+```{r}
+
+# Convert character missing data ("") to NA
+titanicdata$Name <- ifelse(titanicdata$Name == "", NA, titanicdata$Name)
+titanicdata$Sex <- ifelse(titanicdata$Sex == "", NA, titanicdata$Sex)
+titanicdata$Ticket <- ifelse(titanicdata$Ticket == "", NA, titanicdata$Ticket)
+titanicdata$Cabin <- ifelse(titanicdata$Cabin == "", NA, titanicdata$Cabin)
+titanicdata$Embarked <- ifelse(titanicdata$Embarked == "", NA, titanicdata$Embarked)
+
+# convert data type
+titanicdata$Survived <- as.factor(titanicdata$Survived)
+titanicdata$Pclass <- as.factor(titanicdata$Pclass)
+titanicdata$Sex <- as.factor(titanicdata$Sex)
+titanicdata$Embarked <- as.factor(titanicdata$Embarked)
+
+str(titanicdata)
+
+# check missing data
+missingdata <- titanicdata %>% 
+  summarise_all(funs(sum(is.na(.))))
+
+missingdata
+kable(missingdata)
+plot_missing(titanicdata)
+
+```
+
+## 3. Explore Data and Impute Missing Values
+
+```{r}
+#------------------------------------------------------------------------------
+# (1)  Embarked, Fare, and Pclass 
+#------------------------------------------------------------------------------
+
+#I assume that Pclass, Fare, and Embarked might be related to each other since the upper class (1st) passengers are more likely to purchase more expensive tickets, and passengers in the same class or with the similar fare of tickets probably would embark at the same port. 
+
+# Embarked: 2 missing value
+
+titanicdata[is.na(titanicdata$Embarked),]
+# They are all female and Pclass 1, paid a fare of $80, and no family members were aboard the Titanic.
+
+# See how the Fare is distributed among Pclass and Embarked port
+EmbarkedAll <- titanicdata[-c(62,830),]  # remove missing row
+ggplot(EmbarkedAll, aes(x = Embarked, y = Fare, fill = Pclass)) +
+  geom_boxplot()+
+  geom_hline(aes(yintercept=80), colour='red', linetype='dashed', lwd=0.5)+ 
+  theme_few()
+
+# We see that passengers with a fare of $80 and Pclass 1 were more likely to embark at port "C", so we replace the Embarked missing value with "C"
+
+titanicdata$Embarked[is.na(titanicdata$Embarked)] <- as.factor("C")
+
+
+#---------------------------------
+
+# Fare: 1 missing value
+
+titanicdata[is.na(titanicdata$Fare),]
+# This passenger is Pclass 3 and embarked at port S.
+
+# Replace this missing Fare with the median fare for the class 3 and port S. 
+class3portS <- titanicdata[(titanicdata$Pclass=='3') & (titanicdata$Embarked=='S'), ]
+titanicdata$Fare[is.na(titanicdata$Fare)] <- median(class3portS$Fare, na.rm = TRUE)  
+
+
+#------------------------------------------------------------------------------
+# (2) Cabin
+#------------------------------------------------------------------------------
+
+# Cabin
+
+# Most of the "cabin" data is missing, and Pclass, Ticket, and Embarked might contain relevant information for cabin, so I decide to exclude this feature.
+
+titanicdata = subset(titanicdata, select = -Cabin) 
+str(titanicdata)
+
+```
+
+```{r}
+#------------------------------------------------------------------------------
+# (3)  Age
+#------------------------------------------------------------------------------
+
+# Age: 263 missing value
+# There is around 20% of Age data is missing.
+
+# Let's see which feature is more correlated with age. 
+# We examined how age is distributed among the Sex, Pclass, Parch, and SibSp features.
+
+# Age vs. Pclass and Sex
+
+ggplot(titanicdata, aes(x = Sex, y = Age, fill = Pclass)) +
+  geom_boxplot()+
+  theme_few()
+
+# We see that the age distribution seems to be quite similar for male and female, but passengers in upper class are older than passengers in lower class (1>2>3).
+
+#-------------
+
+# Age vs. Parch 
+
+ggplot(titanicdata, aes(x = factor(Parch), y = Age, fill = factor(Parch))) +
+  geom_boxplot() +
+  xlab("Number of parents / children") + 
+  theme_few()
+
+# It seems that the more parents/children passengers have, the older they are.
+
+#-------------
+
+# Age vs. SibSp 
+
+ggplot(titanicdata, aes(x = factor(SibSp), y = Age, fill = factor(SibSp))) +
+  geom_boxplot() +
+  xlab("Number of siblings / spouses") + 
+  theme_few()
+
+# It seems that the more siblings/spouses passengers have, the younger they are.
+
+#-------------
+
+# Based on the above plots, we replaced the missing Age with the median age for the same Pclass, Parch and SibSp. 
+
+ageNAindex <- which.na(titanicdata$Age)  # index of NA age
+
+for(i in ageNAindex) {
+  ageMed <- median(titanicdata$Age, na.rm = TRUE) 
+  
+  ageGroup <- titanicdata[(titanicdata$Pclass==titanicdata$Pclass[i]) & (titanicdata$Parch==titanicdata$Parch[i]) & (titanicdata$SibSp==titanicdata$SibSp[i]),]
+  ageMedGroup <-median(ageGroup$Age, na.rm = TRUE) 
+  
+  if (is.na(ageMedGroup) == FALSE){
+    titanicdata$Age[i] <- ageMedGroup
+  } else {
+     titanicdata$Age[i] <- ageMed
+  } 
+}
+
+```
+
+
+## 4. Feature Engineering 
+
+```{r}
+
+#------------------------------------------------------------------------------
+# (1)  Ticket 
+#------------------------------------------------------------------------------
+
+# Ticket
+
+str(titanicdata)
+length(titanicdata$Ticket)
+
+# Ticketstring = titanicdata$Ticket
+# Ticketstring <- gsub("/", "", Ticketstring)
+# Ticketstring <- gsub("[.]", "", Ticketstring)
+# Ticketstring <- strsplit(Ticketstring, " ")
+
+# Ticketpre <- c()
+# for(i in 1:length(Ticketstring)) {
+#   Ticketpre[i] <- Ticketstring[[i]][1]
+# } 
+
+
+# The similar ticket number may stand for similar room types or facilities they can use, so I categorize the ticket by extracting the first character of the ticket. If the ticket number only contains numeric value, it represents as "N"
+
+TicketPre <- c()
+for(i in 1:length(titanicdata$Ticket)) {
+  Ticdigit <- isDigit(substr(titanicdata$Ticket[i], 1, 1))
+  if (Ticdigit == FALSE){
+    TicketPre[i] <- substr(titanicdata$Ticket[i], 1, 1)
+  } else {
+    TicketPre[i] <- "N"
+  }
+}
+
+# Ticket count
+table(TicketPre)
+
+titanicdata$Ticket <- factor(TicketPre)
+
+#head(titanicdata)
+str(titanicdata)
+
+```
+```{r}
+#------------------------------------------------------------------------------
+# (2) Name
+#------------------------------------------------------------------------------
+
+# As each passenger's name includes title, we can extract their title to create another feature.
+
+# Extract the title from passenger names
+titanicdata$Title <- gsub('(.*, )|(\\..*)', '', titanicdata$Name)
+table(titanicdata$Sex, titanicdata$Title)
+
+# Since some titles just appear few times, we can replace them with more common titles
+
+otherTitle <- c('Capt', 'Col', 'Don','Dona', 'Dr', 'Jonkheer', 'Lady', 'Major',
+                'Rev', 'Sir', 'the Countess')
+
+# Regroup mlle, ms, and mme accordingly
+titanicdata$Title[titanicdata$Title == 'Mlle']        <- 'Miss' 
+titanicdata$Title[titanicdata$Title == 'Ms']          <- 'Miss'
+titanicdata$Title[titanicdata$Title == 'Mme']         <- 'Mrs' 
+titanicdata$Title[titanicdata$Title %in% otherTitle]  <- 'Others'
+
+# Title count by sex
+table(titanicdata$Sex, titanicdata$Title)
+
+titanicdata$Title <- factor(titanicdata$Title)
+
+# drop Name column
+titanicdata = subset(titanicdata, select = -Name) 
+str(titanicdata)
+
+#----------------
+
+# Age distribution among the Title and Sex.
+
+ggplot(titanicdata, aes(x = Title, y = Age, fill = Sex)) +
+  geom_boxplot() +
+  theme_few()
+
+```
+
+```{r}
+#------------------------------------------------------------------------------
+# (3) Total number of family members
+#------------------------------------------------------------------------------
+
+# To figure out whether the larger families would have less chance to survive, we take a look at SibSp and Parch first and create a family size type feature. 
+
+train <- titanicdata[titanicdata$train_test=="train",]
+
+# Frequency plots for SibSp and Parch
+
+# Sibsp
+ggplot(train, aes(x=factor(SibSp), fill=Survived)) +
+  stat_count(position="dodge") +
+  xlab("Number of siblings / spouses") + 
+  theme_few()
+
+# Parch
+ggplot(train, aes(x=factor(Parch), fill=Survived)) +
+  stat_count(position="dodge") +
+  xlab("Number of parents / children") +
+  theme_few()
+
+#-------------------------
+
+# Total family size (include passenger)
+
+titanicdata$familySize <- titanicdata$SibSp + titanicdata$Parch + 1
+table(titanicdata$familySize)
+
+train <- titanicdata[titanicdata$train_test=="train",]
+str(train)
+
+# Frequency plot of family size
+ggplot(train, aes(x=factor(familySize), fill=Survived)) +
+  stat_count(position="dodge") +
+  xlab("Family size") +
+  theme_few()
+
+
+# It seems that single or large families have less chance to survive, so I decide to categorize them into 3 groups - Single, Small, and Large family
+
+titanicdata$familyType[titanicdata$familySize == 1] <- 'Single'
+titanicdata$familyType[(titanicdata$familySize <= 4) & (titanicdata$familySize >= 2)] <- 'Small'
+titanicdata$familyType[titanicdata$familySize >= 5] <- 'Large'
+
+table(titanicdata$familyType)
+titanicdata$familyType <- factor(titanicdata$familyType)
+
+train <- titanicdata[titanicdata$train_test=="train",]
+str(train)
+
+# Frequency plots of family type
+ggplot(train, aes(x=factor(familyType), fill=Survived)) +
+  stat_count(position="dodge") +
+  xlab("Family type") +
+  theme_few()
+
+
+#-------------------------
+
+# drop "familySize "column
+titanicdata = subset(titanicdata, select = -familySize) 
+str(titanicdata)
+
+
+# subset the data back to training and test and drop train_test and Survied variables
+
+titanicdata.train <- subset(titanicdata, train_test == "train")
+titanicdata.train <- subset(titanicdata.train, select = -c(train_test)) 
+
+titanicdata.test <- subset(titanicdata, train_test == "test")
+titanicdata.test <- subset(titanicdata.test, select = -c(train_test, Survived)) 
+#head(titanicdata.test)
+
+```
+
+## 5. More Exploratory Data Analysis 
+
+```{r}
+
+describeBy(titanicdata.train,titanicdata.train$Survived)
+
+#------------------------------------------------------------------------------
+# Features vs. Survived
+#------------------------------------------------------------------------------
+
+# Overall, small family size / female / younger / upper class / boarded on Cherbourg(C) / higher fare /  ticket number starts with "P" -> survived more 
+
+# Fare: higher fare, survive more
+ggplot(titanicdata.train, aes(x = Survived, y = Fare, fill = Survived)) +
+  geom_boxplot() +
+  scale_x_discrete(labels=c("0" = "No", "1" = "Yes")) + 
+  xlab("Survival") + 
+  theme_few()
+
+
+# ***Sex: Females are much more likely to survive than male.
+ggplot(titanicdata.train, aes(x=Sex, fill=Survived)) +
+  stat_count(position="dodge") +
+  theme_few()
+
+
+# **Age and Sex: Male passengers younger than 10 years old are more likely to survive than male passengers between 20-30 years old.
+
+ggplot(titanicdata.train, aes(x = Age, fill = Survived)) + 
+  geom_density(alpha = .3) +
+  facet_grid(.~Sex) + 
+  theme_few()
+
+# Age and Pclass: In the same class, passengers who survived are a bit younger than passengers who didn't survive.
+ggplot(titanicdata.train, aes(x = Pclass, y = Age, fill = Survived)) +
+  geom_boxplot() +
+  theme_few()
+
+
+# Title: Miss, Mrs., Master survived more (female and young male)
+ggplot(titanicdata.train, aes(x=Title, fill=Survived)) +
+  stat_count(position="dodge") +
+  theme_few()
+
+# ggplot(titanicdata.train, aes(x = Age, fill = Survived)) + 
+#   geom_density(alpha = .3) +
+#   facet_grid(.~Title) + 
+#   theme_few()
+
+
+# ***Pclass: In the upper class, passengers are more likely to survive. 
+ggplot(titanicdata.train, aes(x=Pclass, fill=Survived)) +
+  stat_count(position="dodge") +
+  theme_few()
+
+
+# Embarked: Higher percentage of passengers died if they boarded on Southampton(S), while more passengers boarding on Cherbourg(C) survived. 
+ggplot(titanicdata.train, aes(x=Embarked, fill=Survived)) +
+  stat_count(position="dodge") +
+  theme_few()
+
+# Ticket:  Higher percentage of passengers whose ticket number starts with "P" survived. 
+ggplot(titanicdata.train, aes(x=Ticket, fill=Survived)) +
+  stat_count(position="dodge") +
+  theme_few()
+
+
+#------------------------------------------------------------------------------
+# Correlations
+#------------------------------------------------------------------------------
+
+str(titanicdata.train)
+
+# numeric variables
+cor_vars = data.frame(as.numeric(titanicdata.train$Survived),titanicdata.train$Age,titanicdata.train$SibSp,
+                      titanicdata.train$Parch,titanicdata.train$Fare)
+correlations = cor(cor_vars)
+corrplot(correlations,method = "number")
+
+```
+
+## 6. Feature Scaling and Data Splitting
+
+```{r}
+
+# Remove "PassengerId" column
+
+titanicdata.train$PassengerId <- NULL
+str(titanicdata.train)
+
+#  scale the numerical columns
+
+tita_numcols <- titanicdata.train[, sapply(titanicdata.train, is.numeric)]
+tita_faccols <- titanicdata.train[, sapply(titanicdata.train, is.factor)]
+
+tita_numcols <- as.data.frame(scale(tita_numcols, center = TRUE, scale = TRUE))
+
+cleandata <- as.data.frame(c(tita_numcols,tita_faccols))
+str(cleandata)
+summary(cleandata)
+
+rm(tita_numcols,tita_faccols)
+
+#---------------------------
+
+# Kaggle test set
+
+head(titanicdata.test)
+
+titanicdata.test$PassengerId <- NULL
+str(titanicdata.test)
+
+#  scale the numerical columns
+
+tita_numcols <- titanicdata.test[, sapply(titanicdata.test, is.numeric)]
+tita_faccols <- titanicdata.test[, sapply(titanicdata.test, is.factor)]
+
+tita_numcols <- as.data.frame(scale(tita_numcols, center = TRUE, scale = TRUE))
+
+Kaggletestdata <- as.data.frame(c(tita_numcols,tita_faccols))
+str(Kaggletestdata)
+head(Kaggletestdata)
+
+rm(tita_numcols,tita_faccols)
+
+
+#---------------------------
+
+# Data Profiling Report  (Include PCA)
+
+#create_report(cleandata, y = "Survived")
+
+#--------------------------------------------------------------------------------
+
+# Data Splitting
+
+set.seed(123)
+index <- sort(sample(1:nrow(cleandata),round(0.75*nrow(cleandata))))
+titatrain <- cleandata[index,]
+titatest  <- cleandata[-index,]
+
+# check the proportion of survival rate in initial training data, current training and testing data
+
+round(prop.table(table(cleandata$Survived)),digits = 2)
+round(prop.table(table(titatrain$Survived)),digits = 2)
+round(prop.table(table(titatest$Survived)),digits = 2)
+
+```
+
+## 7. Modeling: 
+
+Logistic Regression, Linear Discriminant Analysis (LDA), Lasso and Ridge, Support Vector Machine, Random Forest, Boosting, Neural net
+
+### 7.1 Logistic Regression and Linear Discriminant Analysis (LDA)
+
+```{r}
+# the sensitivities and specificities functions
+
+# TRUE POSITIVE RATE, SENSITIVITY
+TPR <- function(y,yhat)  { sum(y==1 & yhat==1) / sum(y==1) }
+
+# TRUE NEGATIVE RATE, SPECIFICITY
+TNR <- function(y,yhat)  { sum(y==0 & yhat==0) / sum(y==0) }
+
+
+# For models AUC summary
+modelsSummary <- data.frame(Model = character(), AUC = double())
+                           
+
+#--------------------------------------------------------------------------------
+# Logistic Regression
+#--------------------------------------------------------------------------------
+
+# Fit a logistic regression classifier to the training data. 
+
+g1m1 <- glm(Survived ~ ., family="binomial", data=titatrain)
+summary(g1m1)
+
+#------------------
+
+# Evaluate predictions
+
+yhat.glm1 <- predict(g1m1, titatest, type="response")
+pred.glm1 <- rep(0,nrow(titatest))
+pred.glm1[yhat.glm1 > 0.5] <- 1
+
+table(titatest$Survived, pred.glm1)  # confusion matrix
+
+cat("Sensitivity:", TPR(titatest$Survived, pred.glm1), "\n")         
+cat("Specificity:", TNR(titatest$Survived, pred.glm1))     
+
+glm1.roc <- roc(titatest$Survived, yhat.glm1, direction="<")
+glm1.roc  # AUC: 0.8521
+
+#--------------------
+
+# For summary
+
+glm1.AUC <- data.frame(Model = 'Logistic Regression', AUC = glm1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, glm1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kaggleyhat.glm1 <- predict(g1m1, Kaggletestdata, type="response")
+
+
+#--------------------------------------------------------------------------------
+# LDA
+#--------------------------------------------------------------------------------
+
+# Fit a LDA classifier to the training data. 
+
+lda1 <- lda(Survived ~ ., data=titatrain)
+lda1
+
+#---------
+
+# Evaluate predictions
+
+yhat.lda1 <- predict(lda1, titatest)$posterior[,2]
+pred.lda1 <- rep(0, nrow(titatest))
+pred.lda1 [yhat.lda1 > 0.5] <- 1   # 50% threshold
+
+table(titatest$Survived, pred.lda1)  # confusion matrix
+
+lda1.roc <- roc(titatest$Survived, yhat.lda1, direction="<")
+lda1.roc  # AUC: 0.8543
+
+#--------------------
+
+# For summary
+
+lda1.AUC <- data.frame(Model = 'Linear Discriminant Analysis (LDA)', AUC = lda1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, lda1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kaggleyhat.lda1 <- predict(lda1, Kaggletestdata)$posterior[,2]
+
+```
+
+### 7.2 LASSO and Ridge Regression
+
+```{r}
+#--------------------------------------------------------------------------------
+#  LASSO Regression (Shrinkage + Selection)
+#--------------------------------------------------------------------------------
+
+x.train <- model.matrix(Survived ~. , titatrain)[,-1]
+y.train <- titatrain$Survived
+
+x.test <- model.matrix(Survived ~. , titatest)[,-1]
+dim(x.train ); dim(x.test)
+
+
+# Use 10-fold cross validation to determine choices for the tuning parameter lambda
+
+set.seed(123)
+cv_lasso <- cv.glmnet(x.train, y.train, alpha=1, family="binomial", k=10)
+plot(cv_lasso)
+
+# smallest cross-validated error
+lambda_lasso <- cv_lasso$lambda.min  
+log(lambda_lasso)
+
+# fit the model using this lambda
+lasso1 <- glmnet(x.train, y.train, family = "binomial", alpha = 1, lambda = lambda_lasso)
+
+#---------
+
+# Evaluate predictions
+
+yhat.lasso1 <- predict(lasso1, x.test, s=lambda_lasso, type="response")
+pred.lasso1 <- rep(0, nrow(titatest))
+pred.lasso1[yhat.lasso1 > 0.5] <- 1  # 50% threshold
+
+table(titatest$Survived, pred.lasso1)  # confusion matrix
+
+lasso1.roc <- roc(titatest$Survived, yhat.lasso1, direction="<")
+lasso1.roc  # AUC: 0.8544
+
+#---------
+
+# For summary
+
+lasso1.AUC <- data.frame(Model = 'LASSO Regression', AUC = lasso1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, lasso1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kagglex.test <- model.matrix( ~. , Kaggletestdata)[,-1]
+Kaggleyhat.lasso1 <- predict(lasso1, Kagglex.test, s=lambda_lasso, type="response")[,1]
+
+
+#--------------------------------------------------------------------------------
+#  Ridge Regression (Shrinkage)
+#--------------------------------------------------------------------------------
+
+
+# Use 10-fold cross validation to determine choices for the tuning parameter lambda
+
+set.seed(1234)
+cv_ridge <- cv.glmnet(x.train, y.train, alpha=0, family="binomial", k=10)
+plot(cv_ridge)
+
+# smallest cross-validated error
+lambda_ridge <- cv_ridge$lambda.min  
+log(lambda_ridge)
+
+# fit the model using this lambda
+ridge1 <- glmnet(x.train, y.train, family = "binomial", alpha = 0, lambda = lambda_ridge)
+
+#---------
+
+# Evaluate predictions
+
+yhat.ridge1 <- predict(ridge1, x.test, s=lambda_ridge, type="response")
+pred.ridge1 <- rep(0, nrow(titatest))
+pred.ridge1[yhat.ridge1 > 0.5] <- 1  # 50% threshold
+
+table(titatest$Survived, pred.ridge1)  # confusion matrix
+
+ridge1.roc <- roc(titatest$Survived, yhat.ridge1, direction="<")
+ridge1.roc  # AUC: 0.8465
+
+#---------
+
+# For summary
+
+ridge1.AUC <- data.frame(Model = 'Ridge Regression', AUC = ridge1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, ridge1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kaggleyhat.ridge1 <- predict(ridge1, Kagglex.test, s=lambda_ridge, type="response")[,1]
+
+```
+### 7.3 Support Vector Machine (SVM)
+
+```{r}
+#--------------------------------------------------------------------------------
+#  Support Vector Machine (SVM)
+#--------------------------------------------------------------------------------
+
+# Do some mild tuning to fit a SVM to the training data set
+
+svm_pars <- tune.svm(Survived~., data=titatrain, kernel="radial", gamma=c(10^(-5:-1), 0.3, 0.5, 0.7), 
+                     cost=c(10^(-3:2), 2.5, 5, 7.5), cross=5)
+
+summary(svm_pars)
+# So out of the chosen parameters, gamma = 0.01 and cost = 5 perform best.
+
+svm1 <- svm(Survived~., data=titatrain, kernel="radial", gamma = svm_pars$best.parameters$gamma,
+            cost = svm_pars$best.parameters$cost, probability=TRUE)
+summary(svm1)
+
+#--------------
+
+# Evaluate predictions
+
+svmpred <- predict(svm1, newdata = titatest, probability = TRUE)
+
+yhat.svm1 <- attr(svmpred, "probabilities")[,1]
+
+pred.svm1 <- rep(0, nrow(titatest))
+pred.svm1[yhat.svm1 > 0.5] <- 1  # 50% threshold
+
+table(titatest$Survived, pred.svm1)  # confusion matrix for a 50% threshold
+
+svm1.roc <- roc(titatest$Survived, yhat.svm1, direction="<")
+svm1.roc  # AUC: 0.8269
+
+#--------------
+
+# For summary
+
+svm1.AUC <- data.frame(Model = 'Support Vector Machine (SVM)', AUC = svm1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, svm1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+kagglesvmpred <- predict(svm1, newdata = Kaggletestdata, probability = TRUE)
+Kaggleyhat.svm1 <- attr(kagglesvmpred, "probabilities")[,1]
+
+```
+
+### 7.4 Random Forest
+
+```{r}
+#--------------------------------------------------------------------------------
+# Random Forest
+#--------------------------------------------------------------------------------
+
+# Fit a random forest to the data.
+
+xvars <- names(titatrain)[-5]
+mtry <- round(length(xvars)^.5)
+ntree <- 1000
+
+set.seed(652)
+rf1 <- randomForest(Survived ~ ., data = titatrain, ntree=ntree, mtry=mtry, importance=TRUE)
+summary(rf1)
+
+importance(rf1)
+varImpPlot(rf1)
+
+#-----------------
+
+# Evaluate predictions
+
+yhat.rf1 <- predict(rf1, titatest, type="prob")[,2]
+
+pred.rf1 <- rep(0, nrow(titatest))
+pred.rf1[yhat.rf1 > 0.5] <- 1  # 50% threshold
+
+table(titatest$Survived, pred.rf1)
+
+rf1.roc <- roc(titatest$Survived, yhat.rf1, direction="<")
+rf1.roc  # Area under the curve: 0.8915
+
+#-----------------
+
+# For summary
+
+rf1.AUC <- data.frame(Model = 'Random Forest', AUC = rf1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, rf1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kaggleyhat.rf1 <- predict(rf1, Kaggletestdata, type="prob")[,2]
+
+```
+
+### 7.5 Gradient Boosting
+
+```{r}
+#--------------------------------------------------------------------------------
+# Gradient Boosting
+#--------------------------------------------------------------------------------
+
+x.train <- model.matrix(Survived ~. , titatrain)[,-1]
+y.train <- I(titatrain$Survived=="1")*1
+x.test <- model.matrix(Survived ~. , titatest)[,-1]
+dim(x.train ); dim(x.test)
+
+xvars <- names(titatrain)[-5]
+
+# use cross-validation in the caret package to select tuning parameters
+
+set.seed(123) 
+ctrl <- trainControl(method="cv", number=10, search="random")
+model <- train(factor(Survived)~., data=titatrain, method="xgbTree", trControl=ctrl)
+model
+model$bestTune
+
+parm <- list(nthread=2, max_depth=model$bestTune$max_depth, eta=model$bestTune$eta, 
+             gamma=model$bestTune$gamma, min_child_weight=model$bestTune$min_child_weight, 
+             subsample=model$bestTune$subsample)
+
+xgboost1 <- xgboost(parm, data=x.train, label=y.train, verbose=2, objective='binary:logistic', 
+                   nrounds=model$bestTune$nrounds)
+
+# boosted tree variable importance ranking
+imprank <- xgb.importance(feature_names=colnames(x.train), model=xgboost1)
+xgb.plot.importance(imprank, rel_to_first = TRUE, xlab = "Relative Importance")
+
+
+#-----------------
+
+# Evaluate predictions
+
+
+yhat.xgboost1 <- predict(xgboost1, x.test) 
+
+pred.xgboost1 <- rep(0, nrow(titatest))
+pred.xgboost1[yhat.xgboost1 > 0.5] <- 1  # 50% threshold
+
+table(titatest$Survived, pred.xgboost1)
+
+xgboost1.roc <- roc(titatest$Survived, yhat.xgboost1, direction="<")
+xgboost1.roc  # Area under the curve: 0.8944
+
+
+#-----------------
+
+# For summary
+
+xgboost1.AUC <- data.frame(Model = 'Gradient Boosting', AUC = xgboost1.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, xgboost1.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kagglex.test <- model.matrix( ~. , Kaggletestdata)[,-1]
+Kaggleyhat.xgboost1 <- predict(xgboost1, Kagglex.test) 
+
+```
+
+### 7.6 Neural Nets
+
+```{r}
+#--------------------------------------------------------------------------------
+# Neural Nets - single-layer 
+#--------------------------------------------------------------------------------
+
+form1 <- formula(Survived~.)
+
+# 1. commence with a combination: size of 3, maximal iterations of 200, and a decay of 0.001.
+set.seed(123)
+n1 <- nnet(form1, data=titatrain, size=3, maxit=200, decay=0.001)
+
+# 2. put more nodes in the hidden layer
+set.seed(124)
+n2 <- nnet(form1, data=titatrain, size=10, maxit=200, decay=0.001)
+
+# 3. more iterations
+set.seed(125)
+n3 <- nnet(form1, data=titatrain, size=3, maxit=500, decay=0.001)
+
+# 4. lowering the learning rate
+set.seed(126)
+n4 <- nnet(form1, data=titatrain, size=3, maxit=500, decay=0.0001)
+
+
+#--------------------------------------------------------------------------------
+# Neural Nets - multi-layer 
+#--------------------------------------------------------------------------------
+
+#str(cleandata)
+
+dummydata <- model.matrix(
+  ~ Survived + Age + SibSp + Parch + Fare + Pclass + Sex + Ticket + + Embarked + Title + familyType,
+  data = cleandata)
+
+head(dummydata)
+
+train_dummy <- dummydata[index,-1]
+test_dummy  <- dummydata[-index,-1]
+dim(train_dummy); dim(test_dummy)
+head(train_dummy)
+
+#-----------------------------------
+
+fun <- as.formula(Survived1 ~ Age + SibSp + Parch + Fare + Pclass2 + Pclass3 + Sexmale + TicketC + TicketF + TicketL + TicketN + TicketP + TicketS + TicketW  + EmbarkedQ + EmbarkedS + TitleMiss + TitleMr + TitleMrs + TitleOthers + familyTypeSingle + familyTypeSmall)
+
+# 5. two-layered network with 3 and 2 neurons
+set.seed(120)
+n5 <- neuralnet(fun, data=train_dummy, hidden = c(3,2), linear.output=FALSE)
+
+# 6. two-layered network with 2 and 4 neurons
+set.seed(121)
+n6 <- neuralnet(fun, data=train_dummy, hidden = c(2,4), linear.output=FALSE)
+
+#-------------------------------------------------------------------------------------
+
+# Evaluate predictions
+
+# The confusion matrix for a 50% threshold for the test set. 
+
+yhat.n1 <- predict(n1, titatest)
+table(titatest$Survived, yhat.n1[,1]>0.5)
+
+yhat.n2 <- predict(n2, titatest)
+table(titatest$Survived, yhat.n2[,1]>0.5)
+
+yhat.n3 <- predict(n3, titatest)
+table(titatest$Survived, yhat.n3[,1]>0.5)
+
+yhat.n4 <- predict(n4, titatest)
+table(titatest$Survived, yhat.n4[,1]>0.5)
+
+yhat.n5 <- compute(n5, test_dummy [,-1])
+table(titatest$Survived, yhat.n5$net.result>0.5)
+
+yhat.n6 <- compute(n6, test_dummy [,-1])
+table(titatest$Survived, yhat.n6$net.result>0.5)
+
+#-------------------------------
+
+# Produce an ROC curve using the test set for your classifiers.
+
+n1.roc <- roc(titatest$Survived, yhat.n1[,1], direction="<")
+n1.roc  # AUC: 0.8436
+
+n2.roc <- roc(titatest$Survived, yhat.n2[,1], direction="<")
+n2.roc  # AUC: 0.8274  
+
+n3.roc <- roc(titatest$Survived, yhat.n3[,1], direction="<")
+n3.roc  # AUC: 0.838
+
+n4.roc <- roc(titatest$Survived, yhat.n4[,1], direction="<")
+n4.roc  # AUC: 0.8535
+
+n5.roc <- roc(titatest$Survived, yhat.n5$net.result, direction="<")
+n5.roc   # AUC: 0.8089
+
+n6.roc <- roc(titatest$Survived, yhat.n6$net.result, direction="<")
+n6.roc   # AUC: 0.8434
+
+# n4 performs best
+
+#---------------------------
+
+# For summary
+
+n4.AUC <- data.frame(Model = 'Neural Nets (single-layer)', AUC = n4.roc$auc[1])
+modelsSummary <- rbind(modelsSummary, n4.AUC)
+modelsSummary
+
+
+# For Kaggle
+
+Kaggleyhat.n4 <- predict(n4, Kaggletestdata)[,1]
+
+```
+
+## 8. Model Evaluation and Conclusion 
+
+```{r}
+#--------------------------------------------------------------------------------
+# Evaluation and Conclusion
+#--------------------------------------------------------------------------------
+
+# Evaluation: summary of Area under the curve (AUC) of all models
+kable(modelsSummary)
+
+# The Gradient Boosting classifier performs best, and Random Forest classifier also performs quite well.
+# Performance: Gradient Boost > Random Forest > LASSO Regression > Linear Discriminant Analysis (LDA) > Neural Nets (single-layer) > Logistic Regression > Ridge Regression > Support Vector Machine (SVM), but they're quite close.
+
+# The Gradient Boosting and Random Forest models seem to be a bit more competitive than other classifiers in this setting. 
+
+
+# ROC Curves
+
+plot(glm1.roc, lwd=3)
+lines(lda1.roc, lwd=3, col = "yellow")
+lines(lasso1.roc, lwd=3, col = "blue")
+lines(ridge1.roc, lwd=3, col = "green3")
+lines(svm1.roc, lwd=3, col = "darkorange")
+lines(rf1.roc, lwd=3, col = "purple")
+lines(xgboost1.roc, lwd=3, col = "red")
+lines(n4.roc, lwd=3, col = "brown")
+
+legend("bottomright",title="ROC Curves",c("glm","lda","lasso","ridge","svm","rf","xgboost", "neural"),
+       fill=c("black","yellow","blue","green3","darkorange","purple","red","brown"))
+
+```
+## 9. Kaggle Submission
+
+```{r}
+
+# Logistic Regression	0.8520625			
+# Linear Discriminant Analysis (LDA)	0.8542692			
+# LASSO Regression	0.8544390			
+# Ridge Regression	0.8464607			
+# Support Vector Machine (SVM)	0.8269394			
+# Random Forest	0.8915295			
+# Gradient Boosting	0.8944152			
+# Neural Nets (single-layer)	0.8535053	
+
+#-----
+
+kaggle_glm<-data.frame(PassengerID=testdata$PassengerId, 
+                       Survived = ifelse(Kaggleyhat.glm1 > 0.5,1,0))
+head(kaggle_glm)
+write.csv(kaggle_glm, file='titanic_glm.csv', row.names = F)
+
+#-----
+
+kaggle_lda<-data.frame(PassengerID=testdata$PassengerId, 
+                       Survived = ifelse(Kaggleyhat.lda1 > 0.5,1,0))
+head(kaggle_lda)
+write.csv(kaggle_lda, file='titanic_lda.csv', row.names = F)
+
+#-----
+
+kaggle_lasso<-data.frame(PassengerID=testdata$PassengerId, 
+                         Survived = ifelse(Kaggleyhat.lasso1 > 0.5,1,0))
+head(kaggle_lasso)
+write.csv(kaggle_lasso, file='titanic_lasso.csv', row.names = F)
+
+#-----
+
+kaggle_ridge<-data.frame(PassengerID=testdata$PassengerId, 
+                         Survived = ifelse(Kaggleyhat.ridge1 > 0.5,1,0))
+head(kaggle_ridge)
+write.csv(kaggle_ridge, file='titanic_ridge.csv', row.names = F)
+
+#-----
+
+kaggle_svm<-data.frame(PassengerID=testdata$PassengerId, 
+                       Survived = ifelse(Kaggleyhat.svm1 > 0.5,1,0))
+head(kaggle_svm)
+write.csv(kaggle_svm, file='titanic_svm.csv', row.names = F)
+
+#-----
+
+kaggle_rf<-data.frame(PassengerID=testdata$PassengerId, 
+                      Survived = ifelse(Kaggleyhat.rf1 > 0.5,1,0))
+head(kaggle_rf)
+write.csv(kaggle_rf, file='titanic_rf.csv', row.names = F)
+
+#-----
+
+kaggle_xgboost<-data.frame(PassengerID=testdata$PassengerId, 
+                           Survived = ifelse(Kaggleyhat.xgboost1 > 0.5,1,0))
+head(kaggle_xgboost)
+write.csv(kaggle_xgboost, file='titanic_xgboost.csv', row.names = F)
+
+#-----
+
+kaggle_neural<-data.frame(PassengerID=testdata$PassengerId, 
+                          Survived = ifelse(Kaggleyhat.n4 > 0.5,1,0))
+head(kaggle_neural)
+write.csv(kaggle_neural, file='titanic_neural.csv', row.names = F)
+
+```
+
+### References
+
+https://www.kaggle.com/masumrumi/a-statistical-analysis-ml-workflow-of-titanic
+https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic
+https://www.kaggle.com/nadintamer/titanic-survival-predictions-beginner
+https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic
+https://www.kaggle.com/yassineghouzam/titanic-top-4-with-ensemble-modeling
+
