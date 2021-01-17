@@ -48,7 +48,7 @@ library(nnet)
 
 ```{r}
 rm(list = ls()) # clear the workspace
-setwd("C:/Users/User/Desktop/BUS 656 - Machine Learning for BA/Final Project_Titanic")
+setwd("C:/Users/User/Desktop/UW-Madison/Courses/BUS 656 - Machine Learning for BA/Final Project_Titanic/Final Project_Shih-Yuan Wang")
 ```
 
 ## 1. Access the Data Set
@@ -1123,8 +1123,13 @@ write.csv(kaggle_neural, file='titanic_neural.csv', row.names = F)
 ### References
 
 https://www.kaggle.com/masumrumi/a-statistical-analysis-ml-workflow-of-titanic
+
 https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic
+
 https://www.kaggle.com/nadintamer/titanic-survival-predictions-beginner
+
 https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic
+
 https://www.kaggle.com/yassineghouzam/titanic-top-4-with-ensemble-modeling
+
 
