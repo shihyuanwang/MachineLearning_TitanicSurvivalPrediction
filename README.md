@@ -7,6 +7,6 @@ This project is designed to explore what factors would influence a passenger’s
 - R Code: https://htmlpreview.github.io/?https://github.com/shihyuanwang/MachineLearning_TitanicSurvivalPrediction/blob/main/Titanic_Shih-Yuan-Wang.html
 - Titanic Survival Prediction Report: https://github.com/shihyuanwang/MachineLearning_TitanicSurvivalPrediction/blob/main/Kaggle%20Titanic_Shih-Yuan%20Wang.pdf
 
-\
+
 ----------------------------------------------------------------------------
 **Source: Kaggle Competition - "Titanic - Machine Learning from Disaster" - https://www.kaggle.com/c/titanic/overview**
